@@ -579,6 +579,20 @@ function sndCritTick(){playTone({type:'square',freq:1100,duration:0.025,gain:0.1
 // PEERJS MULTIPLAYER — жинхэнэ интернэт P2P
 // ================================================================
 let myPeer=null,myConn=null,rtcRole=null,myColor=null,roomCode=null,onlineMode=false;
+let lobbyCreateRetries=0,lobbyCreateOpenTimer=null,lobbyCreateRetryTimer=null,lobbyJoinTimer=null;
+const PEER_OPTS={
+  debug:0,
+  config:{
+    iceServers:[
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'},
+      {urls:'stun:stun2.l.google.com:19302'}
+    ]
+  }
+};
+const CREATE_OPEN_TIMEOUT_MS=12000;
+const JOIN_OPEN_TIMEOUT_MS=15000;
+const MAX_CREATE_RETRIES=4;
 
 function genCode(){
   const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -586,81 +600,192 @@ function genCode(){
   return r;
 }
 
-function createRoom(){
+function clearLobbyTimers(){
+  clearTimeout(lobbyCreateOpenTimer);lobbyCreateOpenTimer=null;
+  clearTimeout(lobbyCreateRetryTimer);lobbyCreateRetryTimer=null;
+  clearTimeout(lobbyJoinTimer);lobbyJoinTimer=null;
+}
+
+function setCreateStatus(cls,txt){
+  const el=document.getElementById('createStatus');
+  if(!el)return;
+  el.textContent=txt;
+  el.className='lobby-status'+(cls?' '+cls:'');
+}
+
+function teardownNetworking({keepRole=false}={}){
+  clearLobbyTimers();
+  const oldConn=myConn;myConn=null;
+  if(oldConn){try{oldConn.close();}catch(_){/* noop */}}
+  const oldPeer=myPeer;myPeer=null;
+  if(oldPeer&&!oldPeer.destroyed){try{oldPeer.destroy();}catch(_){/* noop */}}
+  onlineMode=false;
+  if(!keepRole){rtcRole=null;myColor=null;roomCode=null;}
+}
+
+function queueCreateRetry(reason){
+  if(lobbyCreateRetries>=MAX_CREATE_RETRIES){
+    setCreateStatus('err','⚠️ Холболт тогтворгүй байна. Дахин оролдоорой.');
+    document.getElementById('roomCodeEl').textContent='------';
+    document.getElementById('waitBtn').disabled=true;
+    document.getElementById('waitBtn').textContent='⏳ Холболт амжилтгүй';
+    return;
+  }
+  lobbyCreateRetries++;
+  setCreateStatus('wait',`${reason} (${lobbyCreateRetries}/${MAX_CREATE_RETRIES})`);
+  document.getElementById('roomCodeEl').textContent='...';
+  document.getElementById('waitBtn').disabled=true;
+  document.getElementById('waitBtn').textContent='⏳ Room дахин үүсгэж байна...';
+  clearLobbyTimers();
+  lobbyCreateRetryTimer=setTimeout(()=>createRoom(true),700+lobbyCreateRetries*300);
+}
+
+function bindPeerLifecycle(peer,mode){
+  peer.on('disconnected',()=>{
+    if(peer!==myPeer||peer.destroyed)return;
+    if(mode==='create')setCreateStatus('wait','Серверээс тасарлаа, дахин холбогдож байна...');
+    else setJS('wait','Сервертэй дахин холбогдож байна...');
+    try{peer.reconnect();}catch(_){/* noop */}
+  });
+
+  peer.on('close',()=>{
+    if(peer!==myPeer||onlineMode)return;
+    if(mode==='create')queueCreateRetry('Холболт хаагдлаа, room дахин үүсгэж байна...');
+    else setJS('err','Peer session дууслаа, дахин JOIN хийнэ үү');
+  });
+}
+
+function createRoom(isRetry=false){
+  teardownNetworking({keepRole:true});
   rtcRole='host';myColor=1;
+  if(!isRetry)lobbyCreateRetries=0;
   roomCode=genCode();
   document.getElementById('roomCodeEl').textContent='...';
-  document.getElementById('createStatus').textContent='Сервэртэй холбогдож байна...';
+  document.getElementById('waitBtn').disabled=true;
+  document.getElementById('waitBtn').textContent='⏳ Room бэлтгэж байна...';
+  setCreateStatus('wait','Сервэртэй холбогдож байна...');
 
-  myPeer=new Peer(roomCode,{debug:0});
+  const peer=new Peer(roomCode,PEER_OPTS);
+  myPeer=peer;
+  bindPeerLifecycle(peer,'create');
 
-  myPeer.on('open',id=>{
+  lobbyCreateOpenTimer=setTimeout(()=>{
+    if(peer!==myPeer||onlineMode)return;
+    queueCreateRetry('Сервер удаан хариулж байна, дахин оролдож байна...');
+  },CREATE_OPEN_TIMEOUT_MS);
+
+  peer.on('open',id=>{
+    if(peer!==myPeer)return;
+    clearLobbyTimers();
+    lobbyCreateRetries=0;
     roomCode=id;
     document.getElementById('roomCodeEl').textContent=id;
-    document.getElementById('createStatus').textContent='✅ Room бэлэн! Найздаа code илгээгээрэй';
+    setCreateStatus('ok','✅ Room бэлэн! Найздаа code илгээгээрэй');
     document.getElementById('waitBtn').disabled=false;
     document.getElementById('waitBtn').textContent='⏳ Opponent хүлээж байна...';
   });
 
-  myPeer.on('connection',conn=>{
+  peer.on('connection',conn=>{
+    if(peer!==myPeer)return;
+    if(myConn&&myConn!==conn){
+      conn.on('open',()=>conn.send({type:'room_busy'}));
+      setTimeout(()=>{try{conn.close();}catch(_){/* noop */}},150);
+      return;
+    }
     myConn=conn;
     setupConn(conn);
     document.getElementById('waitBtn').textContent='✅ Тоглогч холбогдлоо!';
-    document.getElementById('createStatus').textContent='✅ Холбогдлоо!';
+    setCreateStatus('ok','✅ Холбогдлоо!');
   });
 
-  myPeer.on('error',e=>{
-    const msg=e.type==='unavailable-id'?'Room code давхцаж байна, дахин оролдоорой':
-              e.type==='network'?'Сүлжээний алдаа':e.type;
-    document.getElementById('createStatus').textContent='⚠️ '+msg;
-    document.getElementById('createStatus').className='lobby-status err';
+  peer.on('error',e=>{
+    if(peer!==myPeer)return;
+    if(onlineMode){console.warn('peer err during game',e);return;}
+    if(e.type==='unavailable-id'){queueCreateRetry('Code давхцлаа, шинэ code үүсгэж байна...');return;}
+    if(['network','socket-error','server-error','disconnected'].includes(e.type)){
+      queueCreateRetry('Сүлжээний алдаа, дахин оролдож байна...');
+      return;
+    }
+    setCreateStatus('err','⚠️ '+e.type);
   });
 }
 
 function joinRoom(){
-  const code=document.getElementById('joinInput').value.trim().toUpperCase();
+  const input=document.getElementById('joinInput');
+  const code=input.value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  input.value=code;
   if(!code||code.length<4){setJS('err','Code оруулна уу');return;}
+  teardownNetworking({keepRole:true});
   setJS('wait','Холбогдож байна...');
   rtcRole='guest';myColor=2;roomCode=code;
 
-  myPeer=new Peer(undefined,{debug:0});
+  const peer=new Peer(undefined,PEER_OPTS);
+  myPeer=peer;
+  bindPeerLifecycle(peer,'join');
+  lobbyJoinTimer=setTimeout(()=>{
+    if(peer!==myPeer||onlineMode)return;
+    setJS('err','Хугацаа дууслаа. Дахин JOIN оролдоорой');
+    teardownNetworking({keepRole:true});
+  },JOIN_OPEN_TIMEOUT_MS);
 
-  myPeer.on('open',()=>{
-    myConn=myPeer.connect(code,{reliable:true,serialization:'json'});
+  peer.on('open',()=>{
+    if(peer!==myPeer)return;
+    myConn=peer.connect(code,{reliable:true,serialization:'json'});
     setupConn(myConn);
   });
 
-  myPeer.on('error',e=>{
+  peer.on('error',e=>{
+    if(peer!==myPeer)return;
+    clearLobbyTimers();
     if(e.type==='peer-unavailable')setJS('err','Room олдсонгүй — code шалгаарай');
+    else if(['network','socket-error','server-error'].includes(e.type))setJS('err','Сүлжээний алдаа. Дахин оролдоорой');
     else setJS('err','Алдаа: '+e.type);
   });
 }
 
 function setupConn(conn){
   conn.on('open',()=>{
+    if(conn!==myConn)return;
+    clearLobbyTimers();
     onlineMode=true;
     if(rtcRole==='guest'){
       setJS('ok','✅ Холбогдлоо! Тоглоом эхлэх хүлээж байна...');
       const n=document.getElementById('nameOnline').value||'Player';
       conn.send({type:'hello',name:n,av:onlineAv||'⚡',time:selectedTime});
     }
+    else setCreateStatus('ok','✅ Холбогдлоо! Тоглоом эхлэхэд бэлэн');
   });
 
-  conn.on('data',msg=>handleNet(msg));
+  conn.on('data',msg=>{if(conn===myConn)handleNet(msg);});
 
   conn.on('close',()=>{
+    if(conn!==myConn)return;
+    myConn=null;
     onlineMode=false;
+    if(rtcRole==='guest')setJS('err','⚠️ Холболт тасарлаа. Дахин JOIN хийнэ үү');
+    if(rtcRole==='host'){
+      document.getElementById('waitBtn').textContent='⏳ Opponent хүлээж байна...';
+      setCreateStatus('wait','⚠️ Тоглогч гарлаа, дахин хүлээж байна...');
+    }
     if(!G||!G.over)setStatus('⚠️ Холболт тасарлаа');
   });
 
-  conn.on('error',e=>console.warn('conn err',e));
+  conn.on('error',e=>{
+    if(conn!==myConn)return;
+    onlineMode=false;
+    if(rtcRole==='guest')setJS('err','⚠️ Холболтын алдаа');
+    else setCreateStatus('err','⚠️ Холболтын алдаа');
+    console.warn('conn err',e);
+  });
 }
 
 function sendNet(obj){
-  if(myConn&&myConn.open)myConn.send(obj);
+  if(!myConn||!myConn.open)return;
+  try{myConn.send(obj);}catch(_){/* noop */}
 }
 
 function handleNet(msg){
+  if(!msg||!msg.type)return;
   if(msg.type==='hello'){
     const hostN=document.getElementById('nameOnline').value||'Player';
     const s={
@@ -675,6 +800,10 @@ function handleNet(msg){
   else if(msg.type==='start'){launchOnline(msg.settings);}
   else if(msg.type==='move'){applyNetMove(msg);}
   else if(msg.type==='forfeit'){endGame(myColor,'forfeit_opp');}
+  else if(msg.type==='room_busy'){
+    setJS('err','Room аль хэдийн тоглогчтой байна');
+    teardownNetworking({keepRole:true});
+  }
   else if(msg.type==='rematch_req'){
     sendNet({type:'rematch_ok'});
     doRematch();
@@ -690,12 +819,12 @@ function launchOnline(settings){
 function applyNetMove(msg){
   G.sel={r:msg.fR,c:msg.fC};
   G.valid=[{toR:msg.tR,toC:msg.tC,capR:msg.cR??null,capC:msg.cC??null}];
-  execMove({toR:msg.tR,toC:msg.tC,capR:msg.cR??null,capC:msg.cC??null},msg.fR,msg.fC);
+  execMove({toR:msg.tR,toC:msg.tC,capR:msg.cR??null,capC:msg.cC??null},msg.fR,msg.fC,true);
 }
 
 function setJS(cls,txt){
   const el=document.getElementById('joinStatus');
-  el.textContent=txt;el.className='lobby-status '+cls;
+  el.textContent=txt;el.className='lobby-status'+(cls?' '+cls:'');
 }
 
 function copyCode(){
@@ -877,12 +1006,12 @@ function clickCell(r,c){
   G.sel=null;G.valid=[];drawBoard();
 }
 
-function execMove(mv,fR,fC){
+function execMove(mv,fR,fC,fromNetwork=false){
   if(movPiece)return;
   const board=G.board,piece=board[fR][fC],isCap=mv.capR!==null;
   board[mv.toR][mv.toC]=piece;board[fR][fC]=EMPTY;
   if(isCap)board[mv.capR][mv.capC]=EMPTY;
-  if(onlineMode)sendNet({type:'move',fR,fC,tR:mv.toR,tC:mv.toC,cR:mv.capR??null,cC:mv.capC??null});
+  if(onlineMode&&!fromNetwork)sendNet({type:'move',fR,fC,tR:mv.toR,tC:mv.toC,cR:mv.capR??null,cC:mv.capC??null});
   sndMove();
   animMove(fR,fC,mv.toR,mv.toC,piece,()=>afterAnim(mv,fR,fC,piece,isCap));
   drawBoard();
@@ -1017,7 +1146,11 @@ function showLocalSetup(){
 }
 
 function showOnlineLobby(){
-  getAC();showScreen('lobbyScreen');createRoom();
+  getAC();
+  showScreen('lobbyScreen');
+  switchTab('create');
+  setJS('','');
+  createRoom();
 }
 
 function switchTab(tab){
@@ -1058,6 +1191,7 @@ function doRematch(){
   startWithSettings(s);
 }
 function backToMenu(){
+  teardownNetworking();
   showScreen('menuScreen');clearInterval(G.timerInt);onlineMode=false;
   document.querySelector('.mode-select').style.display='flex';
   document.getElementById('localSetup').style.display='none';
@@ -1069,6 +1203,8 @@ function backToMenu(){
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
 
 window.addEventListener('resize',()=>{if(document.getElementById('gameScreen').classList.contains('active')&&BC){const sz=BC.offsetWidth;BC.width=BC.height=FC.width=FC.height=sz;BPX=sz;CELL=sz/BOARD;drawBoard();}});
+window.addEventListener('beforeunload',()=>teardownNetworking());
+document.getElementById('joinInput').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom();});
 
 buildAvatars();G.settings.av1='🦁';G.settings.av2='🐺';
 </script>
