@@ -84,6 +84,9 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .lobby-status.ok{color:var(--green);}
 .lobby-status.err{color:var(--red);}
 .lobby-status.wait{color:var(--gold);}
+.online-profile{width:100%;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;}
+.online-profile-row{display:flex;gap:8px;align-items:center;}
+.online-profile-hint{font-size:10px;color:rgba(255,255,255,0.3);letter-spacing:1.2px;text-transform:uppercase;}
 .room-code{font-family:'Orbitron',monospace;font-size:30px;font-weight:900;color:var(--gold);text-shadow:0 0 20px var(--gold);letter-spacing:8px;text-align:center;cursor:pointer;padding:12px 20px;background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.25);border-radius:10px;transition:all 0.2s;}
 .room-code:hover{background:rgba(255,215,0,0.1);box-shadow:0 0 25px rgba(255,215,0,0.25);}
 .hint{font-size:10px;color:rgba(255,255,255,0.28);text-align:center;letter-spacing:2px;}
@@ -304,6 +307,14 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 <div class="screen" id="lobbyScreen">
   <div class="lobby-box">
     <div class="lobby-title">🌐 ONLINE LOBBY</div>
+    <div class="online-profile">
+      <div class="sec-lbl" style="text-align:left;margin-bottom:0">USERNAME</div>
+      <div class="online-profile-row">
+        <div class="av-row" id="avRowOnline" style="margin:0"></div>
+        <input class="name-inp" id="nameOnline" placeholder="USERNAME" value="Player" maxlength="14" style="margin:0;flex:1">
+      </div>
+      <div class="online-profile-hint">Used as your name in online match</div>
+    </div>
     <div class="lobby-tabs">
       <button class="ltab active" id="tabCreate" onclick="switchTab('create')">CREATE ROOM</button>
       <button class="ltab" id="tabJoin" onclick="switchTab('join')">JOIN ROOM</button>
@@ -321,13 +332,6 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
         <input class="lobby-input" id="joinInput" placeholder="ROOM CODE" maxlength="8" oninput="this.value=this.value.toUpperCase()">
         <button class="lobby-btn" onclick="joinRoom()">⚡ JOIN BATTLE</button>
         <div class="lobby-status" id="joinStatus"></div>
-      </div>
-    </div>
-    <div style="width:100%">
-      <div class="sec-lbl" style="text-align:left;margin-bottom:6px">YOUR PROFILE</div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <div class="av-row" id="avRowOnline" style="margin:0"></div>
-        <input class="name-inp" id="nameOnline" placeholder="Your name" value="Player" maxlength="14" style="margin:0;flex:1">
       </div>
     </div>
     <button class="back-btn" onclick="backToMenu()">↩ BACK</button>

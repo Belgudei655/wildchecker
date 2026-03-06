@@ -38,6 +38,13 @@ function setCreateStatus(cls,txt){
   el.className='lobby-status'+(cls?' '+cls:'');
 }
 
+function getOnlinePlayerName(){
+  const el=document.getElementById('nameOnline');
+  const name=((el&&el.value)||'').trim().slice(0,14);
+  if(el&&el.value!==name)el.value=name;
+  return name||'Player';
+}
+
 function teardownNetworking({keepRole=false}={}){
   clearLobbyTimers();
   netMoveQueue=[];
@@ -177,7 +184,7 @@ function setupConn(conn){
     onlineMode=true;
     if(rtcRole==='guest'){
       setJS('ok','✅ Холбогдлоо! Тоглоом эхлэх хүлээж байна...');
-      const n=document.getElementById('nameOnline').value||'Player';
+      const n=getOnlinePlayerName();
       conn.send({type:'hello',name:n,av:onlineAv||'⚡',time:selectedTime});
     }
     else setCreateStatus('ok','✅ Холбогдлоо! Тоглоом эхлэхэд бэлэн');
@@ -279,7 +286,7 @@ function flushNetMoveQueue(){
 function handleNet(msg){
   if(!msg||!msg.type)return;
   if(msg.type==='hello'){
-    const hostN=document.getElementById('nameOnline').value||'Player';
+    const hostN=getOnlinePlayerName();
     const s={
       n1:hostN, n2:msg.name,
       av1:onlineAv||'🦁', av2:msg.av,
